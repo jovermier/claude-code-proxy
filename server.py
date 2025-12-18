@@ -97,6 +97,15 @@ OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL")
 # This enables per-user quota tracking when routing through a gateway
 PASSTHROUGH_API_KEY = os.environ.get("PASSTHROUGH_API_KEY", "False").lower() == "true"
 
+# Option to require a valid API key when passthrough mode is enabled
+# When enabled, requests without valid API keys will be rejected instead of falling back to static keys
+REQUIRE_PASSTHROUGH_KEY = os.environ.get("REQUIRE_PASSTHROUGH_KEY", "False").lower() == "true"
+
+# Validate configuration
+if REQUIRE_PASSTHROUGH_KEY and not PASSTHROUGH_API_KEY:
+    logger.error("REQUIRE_PASSTHROUGH_KEY=true requires PASSTHROUGH_API_KEY=true")
+    raise ValueError("REQUIRE_PASSTHROUGH_KEY=true requires PASSTHROUGH_API_KEY=true")
+
 # Get preferred provider (default to openai)
 PREFERRED_PROVIDER = os.environ.get("PREFERRED_PROVIDER", "openai").lower()
 
@@ -104,6 +113,7 @@ PREFERRED_PROVIDER = os.environ.get("PREFERRED_PROVIDER", "openai").lower()
 # Default to latest OpenAI models if not set
 BIG_MODEL = os.environ.get("BIG_MODEL", "gpt-4.1")
 SMALL_MODEL = os.environ.get("SMALL_MODEL", "gpt-4.1-mini")
+OPUS_MODEL = os.environ.get("OPUS_MODEL", "gpt-4.1")
 
 # List of OpenAI models
 OPENAI_MODELS = [
@@ -225,8 +235,8 @@ class MessagesRequest(BaseModel):
             new_model = f"anthropic/{clean_v}"
             mapped = True
 
-        # Map Haiku to SMALL_MODEL based on provider preference
-        elif 'haiku' in clean_v.lower():
+        # Map small models (claude-small, haiku) to SMALL_MODEL based on provider preference
+        elif 'claude-small' in clean_v.lower() or 'haiku' in clean_v.lower():
             if PREFERRED_PROVIDER == "google" and SMALL_MODEL in GEMINI_MODELS:
                 new_model = f"gemini/{SMALL_MODEL}"
                 mapped = True
@@ -234,13 +244,22 @@ class MessagesRequest(BaseModel):
                 new_model = f"openai/{SMALL_MODEL}"
                 mapped = True
 
-        # Map Sonnet to BIG_MODEL based on provider preference
-        elif 'sonnet' in clean_v.lower():
+        # Map medium models (claude-medium, sonnet) to BIG_MODEL based on provider preference
+        elif 'claude-medium' in clean_v.lower() or 'sonnet' in clean_v.lower():
             if PREFERRED_PROVIDER == "google" and BIG_MODEL in GEMINI_MODELS:
                 new_model = f"gemini/{BIG_MODEL}"
                 mapped = True
             else:
                 new_model = f"openai/{BIG_MODEL}"
+                mapped = True
+
+        # Map large models (claude-large, opus) to OPUS_MODEL based on provider preference
+        elif 'claude-large' in clean_v.lower() or 'opus' in clean_v.lower():
+            if PREFERRED_PROVIDER == "google" and OPUS_MODEL in GEMINI_MODELS:
+                new_model = f"gemini/{OPUS_MODEL}"
+                mapped = True
+            else:
+                new_model = f"openai/{OPUS_MODEL}"
                 mapped = True
 
         # Add prefixes to non-mapped models if they match known lists
@@ -298,8 +317,8 @@ class TokenCountRequest(BaseModel):
 
         # --- Mapping Logic --- START ---
         mapped = False
-        # Map Haiku to SMALL_MODEL based on provider preference
-        if 'haiku' in clean_v.lower():
+        # Map small models (claude-small, haiku) to SMALL_MODEL based on provider preference
+        if 'claude-small' in clean_v.lower() or 'haiku' in clean_v.lower():
             if PREFERRED_PROVIDER == "google" and SMALL_MODEL in GEMINI_MODELS:
                 new_model = f"gemini/{SMALL_MODEL}"
                 mapped = True
@@ -307,13 +326,22 @@ class TokenCountRequest(BaseModel):
                 new_model = f"openai/{SMALL_MODEL}"
                 mapped = True
 
-        # Map Sonnet to BIG_MODEL based on provider preference
-        elif 'sonnet' in clean_v.lower():
+        # Map medium models (claude-medium, sonnet) to BIG_MODEL based on provider preference
+        elif 'claude-medium' in clean_v.lower() or 'sonnet' in clean_v.lower():
             if PREFERRED_PROVIDER == "google" and BIG_MODEL in GEMINI_MODELS:
                 new_model = f"gemini/{BIG_MODEL}"
                 mapped = True
             else:
                 new_model = f"openai/{BIG_MODEL}"
+                mapped = True
+
+        # Map large models (claude-large, opus) to OPUS_MODEL based on provider preference
+        elif 'claude-large' in clean_v.lower() or 'opus' in clean_v.lower():
+            if PREFERRED_PROVIDER == "google" and OPUS_MODEL in GEMINI_MODELS:
+                new_model = f"gemini/{OPUS_MODEL}"
+                mapped = True
+            else:
+                new_model = f"openai/{OPUS_MODEL}"
                 mapped = True
 
         # Add prefixes to non-mapped models if they match known lists
@@ -1148,6 +1176,19 @@ async def create_message(
                     logger.warning("Passthrough mode enabled but API key failed validation (invalid format or too short)")
             else:
                 logger.warning("Passthrough mode enabled but no API key found in request headers (expected x-api-key or Authorization Bearer)")
+
+        # Check if REQUIRE_PASSTHROUGH_KEY is enabled and no valid API key was found
+        if REQUIRE_PASSTHROUGH_KEY and PASSTHROUGH_API_KEY and not incoming_api_key:
+            error_msg = "REQUIRE_PASSTHROUGH_KEY is enabled but no valid API key was found in request headers (x-api-key or Authorization Bearer)"
+            logger.error(error_msg)
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": error_msg,
+                    "type": "authentication_error",
+                    "code": "missing_api_key"
+                }
+            )
 
         # Determine whether to use passthrough for logging consistency
         use_passthrough = PASSTHROUGH_API_KEY and incoming_api_key
